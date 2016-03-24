@@ -1,0 +1,2 @@
+# trendwatch
+Market Trend Watcher
