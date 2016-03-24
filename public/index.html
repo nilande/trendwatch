@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>TrendWatch</title>
+    <link rel='stylesheet' href='/stylesheets/style.css' />
+    <script type="text/javascript" src="https://code.jquery.com/jquery-2.2.2.min.js"></script>
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script type="text/javascript">
+      var quotes;
+      var chartsLoaded = 0, dataLoaded = 0;
+
+      google.charts.load('current', {'packages':['corechart']});
+      google.charts.setOnLoadCallback(function() {
+        chartsLoaded = 1;
+        if (dataLoaded == 1) drawChart();
+      });
+
+      $.getJSON( "api/quotes/LBMA:SEK=X", function( data ) {
+        quotes = data;
+        dataLoaded = 1;
+        if (chartsLoaded == 1) drawChart();        
+      });
+
+      function drawChart() {
+        var data = new google.visualization.DataTable();
+        data.addColumn('date', 'Date');
+        data.addColumn('number', 'LBMA:SEK=X');
+        $.each(quotes['LBMA:SEK=X'], function(index, value) {
+          data.addRow([new Date(value.date), value.close]);
+        });
+
+        var options = {
+          title: 'Company Performance',
+          legend: { position: 'bottom' }
+        };
+
+        var chart = new google.visualization.LineChart(document.getElementById('price_chart'));
+
+        chart.draw(data, options);
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Welcome to TrendWatch</h1>
+    <div id="price_chart" style="width: 1200px; height: 500px"></div>
+  </body>
+</html>
