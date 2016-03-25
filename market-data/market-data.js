@@ -27,39 +27,36 @@ process.on('SIGTERM', cleanup);
 
 /*
  * getCompositeQuotes retrieves quotes for composite symbols
- * compositeSymbols - array of composite symbols to retrieve
+ * compositeSymbols - array of composite symbols to retrieve, separated by colons
  * opt(.refresh) - refresh cache if this is defined
  * next - function to pass results to 
  */
 function getCompositeQuotes(compositeSymbols, opt, next) {
-  /* Create a list of raw symbols to retieve */
+  /* Create an array of raw symbols to retieve */
   var symbols = new Array();
-  compositeSymbols.forEach(function(compositeSymbol) {
-      compositeSymbol.split(':').forEach(function(symbol) { 
-          if(symbols.indexOf(symbol) < 0) symbols.push(symbol);
-      });
-  });
+  for (compositeSymbol of compositeSymbols) {
+    for (symbol of compositeSymbol.split(':')) { 
+        if(symbols.indexOf(symbol) < 0) symbols.push(symbol);
+    }
+  }
 
+  /* Fetch quotes for all symbols */
   getQuotes(symbols, opt, function(result) {
     var combinedResult = new Object();
 
-    /* Combine results into original composites */
-    compositeSymbols.forEach(function(compositeSymbol) {
+    /* Build response by looping through composite symbols */
+    for (compositeSymbol of compositeSymbols) {
       var symbols = compositeSymbol.split(':');
-      switch (symbols.length) {
-        case 1:
-          /* Composite symbol is a simple symbol, just return the result */
-          combinedResult[symbols[0]] = result[symbols[0]];
-          break;
 
-        case 2:
-          /* Composite symbol requires combining before returning */
-          combinedResult[compositeSymbol] = combineResults(result[symbols[0]],result[symbols[1]]);
-          break;
-
-        default:
+      /* Build 2-dimensional array of symbols to combine */
+      var tempRes = [];
+      for (symbol of symbols) {
+        tempRes.push(result[symbol]);
       }
-    });
+
+      /* Reduce to a 1-dimensional array */
+      combinedResult = tempRes.reduce(multiplyResults);
+    }
 
 	/* Return format dependent on settings */
 	next(combinedResult);
@@ -97,28 +94,22 @@ function cleanup() {
 }
 
 /*
- * Combine results (default action is multiplying, e.g. for currency convertion
+ * Multiply results (used e.g. for currency conversion)
  */
-function combineResults(s1, s2) {
-    var i1 = 0, i2 = 0; 
-    var result = new Array();    /* Array to hold conversion result */
+function multiplyResults(s1, s2) {
+    if (s1.length == 0) return s2; /* s1 empty indicates nothing to reduce */
+
+    /* Create list of dates in s1 and filter out all dates not in s2 */
+    var dates = []; for (var k in s1) dates.push(k); 
+    dates = dates.filter(function(date) {
+      return s2.hasOwnProperty(date);
+    });
+
+    var result = {}; /* Array to hold conversion result */
 
     /* Loop through the series and multiply */
-    while (i1 < s1.length && i2 < s2.length) {
-        var cmp = s1[i1].date.localeCompare(s2[i2].date);
-
-        if (cmp < 0) { // s1's date is earlier than s2
-            i1++;
-        } else if (cmp > 0) { // s2's date is earlier than s1
-            i2++;
-        } else { // Matching dates, combine!
-            result.push({
-                date: s1[i1].date,
-                close: s1[i1].close * s2[i2].close
-            });
-            i1++;
-            i2++;
-        }
+    for (date of dates) {
+      result[date] = s1[date] * s2[date];
     }
 
     return result;
@@ -130,23 +121,23 @@ function combineResults(s1, s2) {
  * next - function to call with the array of results
  */
 function getCachedQuotes(symbols, next) {
-    var result = new Object();
+  var result = new Object();
 
-    db.serialize(function() {
-        var temp = new Array();
-        symbols.forEach(function(symbol) { temp.push('?') });
-        db.all("SELECT symbol, date, close FROM quotes WHERE symbol IN (" + 
-                temp.join() + ") ORDER BY symbol ASC, date ASC", symbols, function(err, rows) {
-            rows.forEach(function(row) {
-                if (!result[row.symbol]) result[row.symbol] = new Array();
-                result[row.symbol].push({
-                    date: row.date,
-                    close: row.close
-                });
-            });
-            next(result);
-        });
+  db.serialize(function() {
+    var temp = new Array();
+    symbols.forEach(function(symbol) { temp.push('?') });
+    db.all("SELECT symbol, date, close FROM quotes WHERE symbol IN (" + 
+            temp.join() + ") ORDER BY symbol ASC, date ASC", symbols, function(err, rows) {
+      rows.forEach(function(row) {
+        /* If needed, create new object for this symbol */
+        if (!result[row.symbol]) result[row.symbol] = new Object();
+
+        /* Add row data to object */
+        result[row.symbol][row.date] = row.close;
+      });
+      next(result);
     });
+  });
 }
 
 /*

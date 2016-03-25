@@ -1,6 +1,6 @@
 var marketData = require('./market-data');
 
-marketData.getQuotes(['^OMXSPI', 'LBMA'], {refresh: true}, function(result) {
+marketData.getCompositeQuotes(['LBMA:SEK=X'], {refresh: false}, function(result) {
   console.log(result);
 });
 
