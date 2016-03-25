@@ -15,22 +15,68 @@
         if (dataLoaded == 1) drawChart();
       });
 
-      $.getJSON( "api/quotes/LBMA:SEK=X", function( data ) {
+      $.getJSON( "api/quotes/SEK=X", function( data ) {
         quotes = data;
         dataLoaded = 1;
         if (chartsLoaded == 1) drawChart();        
       });
 
-      function drawChart() {
-        var data = new google.visualization.DataTable();
-        data.addColumn('date', 'Date');
-        data.addColumn('number', 'LBMA:SEK=X');
-        $.each(quotes['LBMA:SEK=X'], function(index, value) {
-          data.addRow([new Date(value.date), value.close]);
+      function getColumns(data) {
+        var result = [];
+        for (col in data) result.push(col);
+        return result;
+      }
+
+      function prepareQuotes(cols, data) {
+        var result = [];
+        for (symbol of cols) {
+          var column = data[symbol];
+          var newCol = {};
+          for (date in column) {
+            newCol[date] = [ column[date] ];
+          }
+          result.push(newCol);
+        }
+        return result;
+      }
+  
+      function combineQuotes(s1, s2) {
+        if (s1.length == 0) return s2; /* s1 empty indicates nothing to reduce */
+
+        /* Create list of dates in s1 and filter out all dates not in s2 */
+        var dates = []; for (var k in s1) dates.push(k); 
+        dates = dates.filter(function(date) {
+          return s2.hasOwnProperty(date);
         });
 
+        var result = {}; /* Array to hold combination */
+
+        /* Loop through the series and combine */
+        for (date of dates) {
+          result[date] = s1[date].concat(s2[date]);
+        }
+
+        return result;
+      }
+
+      function postProcessQuotes(columns, data) {
+        var result = [];
+        result.push(['Date'].concat(columns));
+        for (date in data) {
+          result.push([new Date(date)].concat(data[date]));
+        }
+        return result;
+      }
+
+      function drawChart() {
+        var cols = getColumns(quotes);        
+        var preparedQuotes = prepareQuotes(cols, quotes);
+        var reducedQuotes = preparedQuotes.reduce(combineQuotes);
+        var quotesTable = postProcessQuotes(cols, reducedQuotes);
+
+        var data = new google.visualization.arrayToDataTable(quotesTable, false);
+
         var options = {
-          title: 'Company Performance',
           legend: { position: 'bottom' }
         };
 

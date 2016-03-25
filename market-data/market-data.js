@@ -48,18 +48,18 @@ function getCompositeQuotes(compositeSymbols, opt, next) {
     for (compositeSymbol of compositeSymbols) {
       var symbols = compositeSymbol.split(':');
 
-      /* Build 2-dimensional array of symbols to combine */
+      /* Build 2-dimensional array of symbol's results to combine */
       var tempRes = [];
       for (symbol of symbols) {
         tempRes.push(result[symbol]);
       }
 
       /* Reduce to a 1-dimensional array */
-      combinedResult = tempRes.reduce(multiplyResults);
+      combinedResult[compositeSymbol] = tempRes.reduce(multiplyResults);
     }
 
-	/* Return format dependent on settings */
-	next(combinedResult);
+    /* Return format dependent on settings */
+    next(combinedResult);
   });
 }
 
