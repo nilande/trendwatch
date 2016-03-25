@@ -1,6 +1,6 @@
 var sqlite3 = require('sqlite3').verbose();
 var db = new sqlite3.Database('market-data/market-data.db');
-var di = require('./data-apis');
+var dataApis = require('./data-apis');
 
 /*****************************************************************************
  * Initialization
@@ -28,10 +28,10 @@ process.on('SIGTERM', cleanup);
 /*
  * getCompositeQuotes retrieves quotes for composite symbols
  * compositeSymbols - array of composite symbols to retrieve
- * refresh - refresh cache if this is defined
- * callback - function to pass results to 
+ * opt(.refresh) - refresh cache if this is defined
+ * next - function to pass results to 
  */
-function getCompositeQuotes(compositeSymbols, opt, callback) {
+function getCompositeQuotes(compositeSymbols, opt, next) {
   /* Create a list of raw symbols to retieve */
   var symbols = new Array();
   compositeSymbols.forEach(function(compositeSymbol) {
@@ -62,24 +62,24 @@ function getCompositeQuotes(compositeSymbols, opt, callback) {
     });
 
 	/* Return format dependent on settings */
-	callback(combinedResult);
+	next(combinedResult);
   });
 }
 
 /*
  * getQuotes refreshes quote data into cache and returns quote history
  * symbols - array of symbols to retrieve
- * refresh - refresh cache if this is defined
- * callback - function to pass results to 
+ * opt(.refresh) - refresh cache if this is defined
+ * next - function to pass results to 
  */
-function getQuotes(symbols, opt, callback) {
-    if (opt.refresh) { /* Refresh quotes before proceeding */    
-        refreshQuotes(symbols, function() {
-            getCachedQuotes(symbols, callback);
-        });
-    } else { /* Rely on quotes from cache */
-        getCachedQuotes(symbols, callback);        
-    }
+function getQuotes(symbols, opt, next) {
+  if (opt.refresh) { /* Refresh quotes before proceeding */    
+    refreshQuotes(symbols, function() {
+      getCachedQuotes(symbols, next);
+    });
+  } else { /* Rely on quotes from cache */
+    getCachedQuotes(symbols, next);        
+  }
 }
 
 // Exports
@@ -127,9 +127,9 @@ function combineResults(s1, s2) {
 /*
  * getCachedQuotes fetches cached market data from the database
  * symbols - array of market symbols
- * callback - function to call with the array of results
+ * next - function to call with the array of results
  */
-function getCachedQuotes(symbols, callback) {
+function getCachedQuotes(symbols, next) {
     var result = new Object();
 
     db.serialize(function() {
@@ -144,7 +144,7 @@ function getCachedQuotes(symbols, callback) {
                     close: row.close
                 });
             });
-            callback(result);
+            next(result);
         });
     });
 }
@@ -152,45 +152,44 @@ function getCachedQuotes(symbols, callback) {
 /*
  * getLastDates gets the last available dates of each symbol from the cache
  * symbols - array of market symbols
- * callback - function to call with the array of results
+ * next - function to call with the array of results
  */
-function getLastDates(symbols, callback) {
-    db.serialize(function() {
-        var temp = new Array();
-        symbols.forEach(function(symbol) { temp.push('?') });
-        db.all("SELECT symbol, MAX(date) AS lastdate FROM quotes WHERE symbol IN (" + 
-                temp.join() + ") GROUP BY symbol", symbols, function(err, rows) {
-            callback(rows);
-        });
+function getLastDates(symbols, next) {
+  db.serialize(function() {
+    var temp = new Array();
+    symbols.forEach(function(symbol) { temp.push('?') });
+    db.all("SELECT symbol, MAX(date) AS lastdate FROM quotes WHERE symbol IN (" + 
+            temp.join() + ") GROUP BY symbol", symbols, function(err, rows) {
+      next(rows);
     });
+  });
 }
 
 /*
  * refreshQuotes downloads new quote information to the database
  * symbols - array for symbols to refresh
- * callback - function to call back when complete
+ * next - function to call back when complete
  */
-function refreshQuotes(symbols, callback) {
-    var query = new Object();
+function refreshQuotes(symbols, next) {
+  var query = new Object();
 
-    /* Initiate symbols array */
-    symbols.forEach(function(symbol) {
-        query[symbol] = "1980-01-01";
+  /* Initiate symbols array */
+  symbols.forEach(function(symbol) {
+    query[symbol] = "1980-01-01";
+  });
+
+  /* Check cache for latest date with the current symbol */
+  getLastDates(symbols, function(lastdates) {
+    /* Update symnbols array with dates from existing cache */        
+    lastdates.forEach(function(symbol) {
+      query[symbol.symbol] = symbol.lastdate;
     });
 
-    /* Check cache for latest date with the current symbol */
-    getLastDates(symbols, function(lastdates) {
-        /* Update symnbols array with dates from existing cache */        
-        lastdates.forEach(function(symbol) {
-            query[symbol.symbol] = symbol.lastdate;
-        });
-
-        /* Refresh quotes */
-        
-        di.getQuotes(query, function(results) {
-            storeQuotes(results, callback);
-        });
+    /* Refresh quotes */
+    dataApis.getQuotes(query, function(results) {
+      storeQuotes(results, next);
     });
+  });
 }
 
 /*
@@ -198,26 +197,29 @@ function refreshQuotes(symbols, callback) {
  * symbol - Symbol name, e.g. "DJIA"
  * quotes - Array for quotes having "date" and "close" properties
  */
-function storeQuotes(quotes, callback) {
-    db.serialize(function() {
-        /* Prepare statement */
-        var stmt = db.prepare("INSERT OR REPLACE INTO quotes VALUES (?, ?, ?)");
+function storeQuotes(quotes, next) {
+  db.serialize(function() {
+    /* Prepare statement */
+    var stmt = db.prepare("INSERT OR REPLACE INTO quotes VALUES (?, ?, ?)");
 
-        /* Begin transaction */
-        db.run("BEGIN TRANSACTION");
+    /* Begin transaction */
+    db.run("BEGIN TRANSACTION");
 
-        for (var symbol in quotes) {
-            /* Insert all rows */
-            for (var i = 0; i < quotes[symbol].length; i++) {
-		if (quotes[symbol][i].close > 0) /* Skip values that are blank or zero */
-                  stmt.run(symbol, quotes[symbol][i].date, quotes[symbol][i].close);
-            }
-        }
+    for (var symbol in quotes) {
+      /* Save some lookups for big data loads */
+      var tempQuotes = quotes[symbol];
 
-        /* End transaction */
-        db.run("END TRANSACTION", callback);
+      /* Insert all rows */
+      for (date in tempQuotes) {
+        if (tempQuotes[date] > 0) /* Skip values that are blank or zero */
+          stmt.run(symbol, date, tempQuotes[date]);
+      }
+    }
 
-        /* Finalize */
-        stmt.finalize();
-    });
+    /* End transaction */
+    db.run("END TRANSACTION", next);
+
+    /* Finalize */
+    stmt.finalize();
+  });
 }

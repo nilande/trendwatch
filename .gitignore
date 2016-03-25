@@ -1,5 +1,6 @@
 # Adjusted from template by Anders
 *.db
+initiate-vars.sh
 
 # Logs
 logs

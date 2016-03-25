@@ -1,5 +1,14 @@
-var http = require('http');
+const http = require('http');
 const https = require('https');
+
+/*****************************************************************************
+ * Settings
+ *****************************************************************************/
+
+/* Column names in which to expect closing values for specific symbols */
+const closeCols = {
+    'LBMA': 'USD (PM)'
+};
 
 /*****************************************************************************
  * Public function declarations
@@ -26,18 +35,7 @@ function getQuotes(query, callback) {
     /* Loop through symbols */
     for (var symbol in query) {
         pending++; /* Keep track of pending results */
-
-        switch(symbol) {
-            case 'LBMA':
-                /* Some symbols are collected from Quandl instead of Yahoo Finance */
-                getQuoteQuandl(symbol, query[symbol], collect);
-                break;
-
-            default:
-                /* Default is to collect from Yahoo Finance */
-                getQuoteYF(symbol, new Date(query[symbol]), new Date(), collect);
-                break;
-        }
+        getQuote(symbol, query[symbol], collect);
     }
 }
 
@@ -49,67 +47,20 @@ module.exports.getQuotes = getQuotes;
  *****************************************************************************/
 
 /*
- * getQuoteQuandl retrieves quote information from Quandl
- * symbol - the symbol to retireve. CURRENTLY ONLY HANDLES LBMA
- * from - start of date range
- * callback - function to pass results to
- */
-function getQuoteQuandl(symbol, from, callback) {
-    var result;
-
-    /* HTTP request details for Yahoo Finance */
-    var url = "https://www.quandl.com/api/v3/datasets/LBMA/GOLD.csv?start_date=" + from
-
-    /* Submit HTTP request and process results */
-    https.request(url, function(res) {
-        /* On error, return empty result */
-        if (res.statusCode != 200) {
-            result = [];
-            callback(symbol, []);            
-            return;
-        }
-
-        res.setEncoding('utf8');
-
-        /* Add chunks of data to result */
-        var body = '';
-            res.on('data', function (chunk) {
-            body += chunk;
-        });
-
-        /* At completion, process results and call back */
-        res.on('end', function() {
-            result = processQuotesQuandl(symbol, body);
-            callback(symbol, result);
-        });
-    }).end();
-}
-
-/*
- * getQuoteYF retrieves quote information from YahooFinance
+ * getQuote retrieves quote information from YahooFinance or Quandl
  * symbol - the symbol to retireve
  * from - start of date range
- * to - end of date range
- * callback - function to pass results to
+ * next - function to pass results to
  */
-function getQuoteYF(symbol, from, to, callback) {
+function getQuote(symbol, from, next) {
     var result;
 
-    /* HTTP request details for Yahoo Finance */
-    var options = {
-        host: "ichart.finance.yahoo.com",
-        path: "/table.csv?s=" + symbol
-        + "&a=" + from.getMonth() + "&b=" + from.getDate() + "&c=" + from.getFullYear()
-        + "&d=" + to.getMonth() + "&e=" + to.getDate() + "&f=" + to.getFullYear() 
-        + "&g=&q=q&y=0&z=" + symbol + "&x=.csv"
-    };        
-
-    /* Submit HTTP request and process results */
-    http.request(options, function(res) {
+    /* Define callback function to process HTTP(s) results */
+    var callback = function(res) {
         /* On error, return empty result */
         if (res.statusCode != 200) {
             result = [];
-            callback(symbol, []);            
+            next(symbol, {});
             return;
         }
 
@@ -121,66 +72,61 @@ function getQuoteYF(symbol, from, to, callback) {
             body += chunk;
         });
 
-        /* At completion, process results and call back */
+        /* At completion, process results and call back to next function */
         res.on('end', function() {
-            result = processQuotesYF(body);
-            callback(symbol, result);
+            result = processQuotes(symbol, body);
+            next(symbol, result);
         });
-    }).end();
+    }
+
+    switch(symbol) {
+        case 'LBMA':
+            /* Some symbols are collected from Quandl instead of Yahoo Finance */
+            /* Define URL, submit HTTPS request and process results */
+            /* Note: If you have an API key, set it in the QUANDL_API_KEY environment var */
+            var url = 'https://www.quandl.com/api/v3/datasets/LBMA/GOLD.csv?'
+            + (process.env.QUANDL_API_KEY ? ('api_key=' + process.env.QUANDL_API_KEY + '&') : '')
+            + 'start_date=' + from;
+            https.request(url, callback).end();
+            break;
+
+        default:
+            /* Default is to collect from Yahoo Finance */
+            /* Define URL, submit HTTP request and process results */
+            var d1 = new Date(from), d2 = new Date();
+            var url = "http://ichart.finance.yahoo.com/table.csv?s=" + symbol
+            + "&a=" + d1.getMonth() + "&b=" + d1.getDate() + "&c=" + d1.getFullYear()
+            + "&d=" + d2.getMonth() + "&e=" + d2.getDate() + "&f=" + d2.getFullYear() 
+            + "&g=&q=q&y=0&z=" + symbol + "&x=.csv"
+            http.request(url, callback).end();
+            break;
+    }
 }
 
 /*
  * processQuotes converts the CSV results to an array
- * symbol - the symbol to retireve. CURRENTLY ONLY HANDLES LBMA
+ * symbol - the symbol to retireve
  * body - csv text to process 
  */
-function processQuotesQuandl(symbol, body) {
+function processQuotes(symbol, body) {
     /* Split into array of lines */
     var lines = body.split('\n');
 
     /* Split headings and find columns indeces of "Date" and "Close" columns */
     var headings = lines.splice(0,1)[0].split(',');
-    var result = new Array();
+    var result = new Object();
     var dateCol = headings.indexOf("Date");
-    var closeCol = headings.indexOf("USD (PM)");
+    
+    /* Lookup column in which to find closing values from the settings map */
+    var closeCol = headings.indexOf(closeCols[symbol] || 'Close');
 
     /* Loop through lines and store date and close values to result array */
     lines.forEach(function(line) {
         if (line != '') {
            var cells = line.split(',');
-           result.push({ date: cells[dateCol], close: cells[closeCol] });
+           result[cells[dateCol]] = cells[closeCol];
         }
     });
-
-    /* Reorder by date */
-    result.sort(function(a,b) { return a.date.localeCompare(b.date) });
-
-    return result;
-}
-/*
- * processQuotes converts the CSV results to an array
- * body - csv text to process 
- */
-function processQuotesYF(body) {
-    /* Split into array of lines */
-    var lines = body.split('\n');
-
-    /* Split headings and find columns indeces of "Date" and "Close" columns */
-    var headings = lines.splice(0,1)[0].split(',');
-    var result = new Array();
-    var dateCol = headings.indexOf("Date");
-    var closeCol = headings.indexOf("Close");
-
-    /* Loop through lines and store date and close values to result array */
-    lines.forEach(function(line) {
-        if (line != '') {
-           var cells = line.split(',');
-           result.push({ date: cells[dateCol], close: cells[closeCol] });
-        }
-    });
-
-    /* Reorder by date */
-    result.sort(function(a,b) { return a.date.localeCompare(b.date) });
 
     return result;
 }
